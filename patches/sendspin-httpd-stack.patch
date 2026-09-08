@@ -1,0 +1,9 @@
+--- a/src/esp/ws_server.cpp
++++ b/src/esp/ws_server.cpp
+@@ -61,3 +61,6 @@
+     // Configure the HTTP server
+     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
++    // ESP-IDF defaults to 4096 bytes, which is insufficient for the complete
++    // Sendspin WebSocket receive/decrypt/dispatch path on ESP32.
++    config.stack_size = 16384;
+     if (task_stack_in_psram) {

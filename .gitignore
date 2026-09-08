@@ -1,0 +1,14 @@
+# Gitignore settings for ESPHome
+# This is an example and may include too much for your use-case.
+# You can modify this file to suit your needs.
+/.esphome/
+/secrets.yaml
+/.ma_token
+/.cache-esphome/
+/.venv/
+/.venv-*/
+/__pycache__/
+*.py[cod]
+*.bin
+*.elf
+*.map

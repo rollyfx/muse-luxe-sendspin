@@ -1,0 +1,32 @@
+Muse Luxe / ESPHome 2026.8.1 / sendspin-cpp 0.7.2
+Music Assistant 2.10.2
+Test: Opus 48 kHz, 16-bit, stereo in a Sendspin sync group
+
+[00:37:47.357] sendspin.client: Stream Started
+[00:37:49.224] sendspin.sync_task: Processed new codec header: opus, 48000 Hz, 2 ch, 16-bit
+[00:37:49.296] sendspin.sync_task: Lost sync (7654us off), reporting error
+[00:37:49.307] sendspin.sync_task: Regained sync, reporting synchronized
+
+[00:37:49.341] ***ERROR*** A stack overflow in task pthread has been detected.
+
+Backtrace:
+  0x4008bc08 panic_abort
+  0x4008bbcd esp_system_abort
+  0x4008c3b1 vApplicationStackOverflowHook
+  0x4008cbb6 vTaskSwitchContext
+  0x4008bf64 _frxt_dispatch
+  0x4008bf16 _frxt_int_exit
+  0x400fbed0 sendspin::SyncTask::handle_load_chunk(sendspin::SyncContext&)
+               managed_components/sendspin__sendspin-cpp/src/sync_task.cpp:228
+
+[00:37:50.378] Rebooting...
+[00:37:50.378] rst:0xc (SW_CPU_RESET),boot:0x17 (SPI_FAST_FLASH_BOOT)
+
+Source observation:
+  sendspin-cpp 0.7.2 src/sync_task.cpp defines
+  SYNC_TASK_STACK_SIZE = 6192 with the comment "Opus uses more stack than FLAC".
+
+After reboot, Wi-Fi authentication failed repeatedly for about 94 seconds
+(Probe Request Unsuccessful, Auth Expired, Authentication Failed). The device
+then reconnected to Music Assistant automatically through the configured
+manual discovery address configured for the Muse.

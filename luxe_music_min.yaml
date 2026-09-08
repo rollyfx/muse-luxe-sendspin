@@ -1,0 +1,287 @@
+esphome:
+  name: muse-luxe-music
+  friendly_name: Raspiaudio Luxe Music
+  min_version: 2026.8.1
+  name_add_mac_suffix: false
+  on_boot:
+    priority: -100
+    then:
+      - output.turn_on: amp_enable
+      - script.execute: led_red
+      # Le composant es8388 natif n'écrit jamais DACPOWER (0x04) : sans cette
+      # ligne, les sorties LOUT1/ROUT1 du DAC restent désactivées (défaut
+      # puce = silence total). Le firmware officiel écrit 0x30 au setup.
+      - select.set:
+          id: dac_output_select
+          option: LINE1
+      # Gain analogique max du mixeur de sortie : le select écrit LOUT1/ROUT1
+      # (0x2E/0x2F) à 0x1E = 0 dB ; le maximum puce est 0x21 = +4,5 dB.
+      # Dernier étage de gain avant l'ampli (gain fixe). Revenir à 0x1E si
+      # saturation audible.
+      - lambda: |-
+          auto *dac = id(luxe_dac);
+          dac->write_byte(0x2E, 0x21);  // LOUT1VOL : +4,5 dB
+          dac->write_byte(0x2F, 0x21);  // ROUT1VOL : +4,5 dB
+          uint8_t v = 0;
+          if (dac->read_byte(0x2E, &v)) {
+            ESP_LOGI("boot", "LOUT1VOL = 0x%02X", v);
+          }
+      # Volume initial garanti sur le DAC (le défaut 0xC0 de DACCONTROL4/5
+      # équivaut à -96 dB). MA reprendra la main dès la 1re commande volume.
+      - media_player.volume_set:
+          id: external_media_player
+          volume: 0.8
+  project:
+    name: raspiaudio.music-assistant
+    version: "2026.8.1-min"
+
+esp32:
+  variant: esp32
+  cpu_frequency: 240MHz
+  framework:
+    type: esp-idf
+    advanced:
+      loop_task_stack_size: 16384
+      # +40 Ko d'IRAM, recommandé par le warning ESPHome à chaque boot
+      # et activé dans le firmware officiel Raspiaudio.
+      sram1_as_iram: true
+
+logger:
+  level: WARN
+
+api:
+
+wifi:
+  networks:
+    - ssid: !secret wifi_ssid
+      password: !secret wifi_password
+      # Pas de BSSID épinglé : le mesh Orbi change d'AP selon la pièce
+      # (bureau: 4C:C9 à -33 dB). 2026-08-25 : une édition yaml avait
+      # supprimé la ligne password ci-dessus → « No matching network found »
+      # (sans clé, ESPHome ne matche que les réseaux ouverts). Radio jamais HS.
+  manual_ip:
+    static_ip: !secret muse_static_ip
+    gateway: !secret network_gateway
+    subnet: 255.255.255.0
+    dns1: !secret network_dns
+  reboot_timeout: 0s
+  # 20.5 dBm (max) provoquait des hard hangs/brownout (TX RF + ampli GPIO21).
+  # 8.5 dBm OK à l'ancienne position (RSSI -33, lien symétrique). À la position
+  # définitive (2026-08-25 soir), 8.5 rend l'uplink marginal : downlink fort
+  # (-35 dBm) mais 300 ms de latence moyenne (retransmissions). 11.5 = palier
+  # déjà validé historiquement ; remonter à 14.5 seulement si nécessaire.
+  power_save_mode: NONE
+  output_power: 11.5dB
+  ap:
+    ssid: "luxemusic"
+    password: !secret fallback_password
+
+ota:
+  - platform: esphome
+
+# Raison du dernier reset, lisible via l'API (diagnostic des reboots en groupe).
+debug:
+
+psram:
+  mode: quad
+  speed: 80MHz
+
+i2c:
+  sda: GPIO18
+  scl: GPIO23
+  frequency: 100kHz
+  id: bus_a
+
+audio_dac:
+  - platform: es8388
+    id: luxe_dac
+
+# Sorties analogiques du ES8388 : le setup natif ne les active pas, on force
+# LOUT1/ROUT1 (celles câblées vers l'ampli) au boot via le select ci-dessus.
+select:
+  - platform: es8388
+    es8388_id: luxe_dac
+    dac_output:
+      id: dac_output_select
+
+# Ampli du Muse Luxe : GPIO21 haut = actif (dac_mute inversé jamais activé
+# dans le firmware officiel Raspiaudio).
+output:
+  - platform: gpio
+    id: amp_enable
+    pin: GPIO21
+
+i2s_audio:
+  - id: i2s_audio_bus
+    i2s_lrclk_pin: GPIO25
+    i2s_bclk_pin: GPIO5
+    # MCLK de l'ES8388 : le firmware officiel Raspiaudio câble GPIO0 en
+    # CLK_OUT1 pour ça. Sans horloge maître, le DAC (mode esclave) reste muet.
+    i2s_mclk_pin: GPIO0
+
+# Sortie audio directe : le serveur SendSpin transcode déjà en FLAC 48 kHz
+# stéréo ; aucun resampler intermédiaire (tâche + stack + PSRAM économisés).
+speaker:
+  - platform: i2s_audio
+    id: box_speaker
+    i2s_audio_id: i2s_audio_bus
+    i2s_dout_pin: GPIO26
+    dac_type: external
+    channel: stereo
+    audio_dac: luxe_dac
+    buffer_duration: 100ms
+    mclk_multiple: 256
+
+sendspin:
+  id: sendspin_hub
+  # Le chemin WebSocket/HTTP reçoit et déchiffre tous les chunks sur une pile
+  # de 4 Kio par défaut dans sendspin-cpp 0.7.2. Cette pile est patchée à
+  # 16 Kio dans le build ; la RAM interne donne aussi un canari fiable et évite
+  # que son débordement ne corrompe le handle du ring buffer en PSRAM.
+  task_stack_in_psram: false
+
+media_source:
+  - platform: sendspin
+    id: sendspin_source
+    # 512 Kio se remplissaient pendant le burst PCM initial (chunks rejetés,
+    # tempête de logs et pertes de synchro). 1 Mio garde de la marge tout en
+    # restant très inférieur aux 2 Mio du firmware officiel trop chargé.
+    buffer_size: 1048576
+    sample_rate: 48000
+    decode_memory: psram
+    # La pile sendspin-cpp ne fait que 6192 octets. En PSRAM, Opus la dépasse
+    # immédiatement et PCM finit par corrompre le ring buffer voisin
+    # (LoadProhibited, handle quasi-NULL). La garder en RAM interne isole la
+    # pile du stockage audio PSRAM et laisse le canari FreeRTOS la protéger.
+    task_stack_in_psram: false
+    # Le serveur SendSpin (Voice PE, Wi-Fi chargé) délivre les chunks avec une
+    # gigue de plusieurs centaines de ms ; le seuil de hard-sync est de 5 ms.
+    # Une réserve de 2 s au démarrage (ajustable par le serveur) absorbe cette
+    # gigue au lieu de déclencher des Lost sync en boucle.
+    initial_static_delay: 2000ms
+    static_delay_adjustable: true
+
+# Lecteur contrôlé par le serveur SendSpin (télécommande groupe + bouton play).
+media_player:
+  - platform: sendspin
+    id: sendspin_media_player
+
+  - platform: speaker_source
+    name: Raspiaudio Luxe Music
+    id: external_media_player
+    media_pipeline:
+      speaker: box_speaker
+      sources:
+        - sendspin_source
+      format: WAV
+      num_channels: 2
+      sample_rate: 48000
+    volume_increment: 0.05
+    volume_min: 0.5
+    volume_max: 1.0
+    on_state:
+      then:
+        - lambda: |-
+            using media_player::MediaPlayerState;
+            const auto state = id(external_media_player).state;
+            if (
+              state == MediaPlayerState::MEDIA_PLAYER_STATE_PLAYING ||
+              state == MediaPlayerState::MEDIA_PLAYER_STATE_ANNOUNCING
+            ) {
+              id(led_green).execute();
+            } else {
+              id(led_red).execute();
+            }
+
+script:
+  - id: led_red
+    then:
+      - light.turn_on:
+          id: led
+          red: 100%
+          green: 0%
+          blue: 0%
+          brightness: 100%
+
+  - id: led_green
+    then:
+      - light.turn_on:
+          id: led
+          red: 0%
+          green: 100%
+          blue: 0%
+          brightness: 100%
+
+# Raison du dernier reset (diagnostic reboots) — lisible via l'API.
+text_sensor:
+  - platform: debug
+    reset_reason:
+      name: Reset Reason
+      id: reset_reason
+  - platform: wifi_info
+    bssid:
+      name: "BSSID associé"
+      id: wifi_bssid
+
+# Boutons locaux uniquement (pas d'entités Home Assistant -> RAM API économisée).
+binary_sensor:
+  - platform: gpio
+    pin:
+      number: GPIO12
+      inverted: true
+      mode:
+        input: true
+        output: false
+        open_drain: false
+        pullup: true
+        pulldown: false
+      drive_strength: 20.0
+    id: button_play
+    internal: true
+    on_press:
+      then:
+        - media_player.toggle: sendspin_media_player
+
+  - platform: gpio
+    pin:
+      number: GPIO19
+      inverted: true
+      mode:
+        input: true
+        pullup: true
+    id: button_vol_up
+    internal: true
+    on_click:
+      - media_player.volume_up:
+          id: external_media_player
+
+  - platform: gpio
+    pin:
+      number: GPIO32
+      inverted: true
+      mode:
+        input: true
+        pullup: true
+    id: button_vol_down
+    internal: true
+    on_click:
+      - media_player.volume_down:
+          id: external_media_player
+
+# LED de statut locale (rouge = arrêt, vert = lecture).
+light:
+  - platform: esp32_rmt_led_strip
+    id: led
+    internal: true
+    pin: GPIO22
+    default_transition_length: 0s
+    chipset: WS2812
+    num_leds: 1
+    rgb_order: grb
+
+# --- Instrumentation temporaire (diagnostic position définitive) ---
+sensor:
+  - platform: wifi_signal
+    name: "RSSI Wi-Fi"
+    id: wifi_rssi
+    update_interval: 10s
