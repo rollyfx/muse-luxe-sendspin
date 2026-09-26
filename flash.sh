@@ -25,7 +25,9 @@ echo "📄 YAML: $YAML"
 echo ""
 
 # ── Méthode 1 : esphome CLI local/natif (idéal) ──
-if [ -x "$SCRIPT_DIR/.venv-2026.8.3/bin/esphome" ]; then
+if [ -x "$SCRIPT_DIR/.venv-2026.9/bin/esphome" ]; then
+    ESPHOME="$SCRIPT_DIR/.venv-2026.9/bin/esphome"
+elif [ -x "$SCRIPT_DIR/.venv-2026.8.3/bin/esphome" ]; then
     ESPHOME="$SCRIPT_DIR/.venv-2026.8.3/bin/esphome"
 elif [ -x "$SCRIPT_DIR/.venv/bin/esphome" ]; then
     ESPHOME="$SCRIPT_DIR/.venv/bin/esphome"

@@ -1,7 +1,7 @@
 esphome:
   name: muse-luxe-music
   friendly_name: Raspiaudio Luxe Music
-  min_version: 2026.8.1
+  min_version: 2026.9.0
   name_add_mac_suffix: false
   on_boot:
     priority: -100
@@ -34,7 +34,7 @@ esphome:
       # crash/reboot. Le défaut -96 dB du DAC est couvert par volume_initial.
   project:
     name: raspiaudio.music-assistant
-    version: "2026.8.1-min"
+    version: "2026.9.0-min"
 
 esp32:
   variant: esp32
@@ -122,8 +122,8 @@ i2s_audio:
     # CLK_OUT1 pour ça. Sans horloge maître, le DAC (mode esclave) reste muet.
     i2s_mclk_pin: GPIO0
 
-# Sortie audio directe : le serveur SendSpin transcode déjà en FLAC 48 kHz
-# stéréo ; aucun resampler intermédiaire (tâche + stack + PSRAM économisés).
+# Sortie audio directe : le serveur SendSpin transcode en PCM 48 kHz (profil
+# mono validé) ; aucun resampler intermédiaire (tâche + stack + PSRAM économisés).
 speaker:
   - platform: i2s_audio
     id: box_speaker
@@ -146,6 +146,13 @@ sendspin:
 media_source:
   - platform: sendspin
     id: sendspin_source
+    # ESPHome ≥ 2026.9 (PR #19047) : codecs annoncés au serveur. Défaut
+    # [flac, opus, pcm] — FLAC d'abord, or micro-flac corrompt le heap sur ce
+    # build (crashs LoadProhibited, cf. crash_analysis.md) et Opus déborde la
+    # pile SyncTask. Annoncer PCM seul : quel que soit le réglage MA (qui a
+    # déjà été réinitialisé par une maj, cf. README 2026-09-26), le serveur ne
+    # peut négocier que le profil validé pcm 48 kHz/16 bit (mono imposé côté MA).
+    codecs: [pcm]
     # 512 Kio se remplissaient pendant le burst PCM initial (chunks rejetés,
     # tempête de logs et pertes de synchro). 1 Mio garde de la marge tout en
     # restant très inférieur aux 2 Mio du firmware officiel trop chargé.

@@ -58,7 +58,7 @@ L'amplificateur externe (GPIO21) est activé au boot pour alimenter le speaker.
 ```bash
 # Compiler le firmware (ne nécessite pas d'accès USB)
 docker run --rm -v "$(pwd)":/config \
-  esphome/esphome:2026.2.0 compile /config/luxe_music_lite.yaml
+  esphome/esphome:2026.9.0 compile /config/luxe_music_min.yaml
 
 # Flasher via esptool (accès USB nécessaire)
 esptool --chip esp32 --port /dev/ttyUSB0 --baud 115200 \
@@ -93,7 +93,10 @@ ESPHome 2026.2.0 est la version compatible avec ces PRs git. Les versions 2026.5
 3. **Un seul sendspin media_source par hub** → pas de double pipeline announcement+media avec deux sources sendspin distinctes
 4. **Docker Desktop (VM)** → ne peut pas accéder aux device USB `/dev/ttyUSB*` directement ; utiliser `esptool` en natif après compilation Docker
 5. **Crash pendant lecture** → logs ESPHome: `LoadProhibited`, PC dans `vApplicationStackOverflowHook`; le pipeline a donc été réduit à une seule voie média et les stacks `sendspin`, `speaker_source`, `resampler` passent en PSRAM.
-6. **OTA instable** → l'upload vers l'adresse de l'enceinte démarre mais timeout sur ACK; utiliser le flash USB série avec `firmware.factory.bin`.
+6. **OTA** → historiquement instable (timeout sur ACK) à l'ancienne position ;
+   requalifiée le 2026-09-14 depuis la salle de bain (RSSI -54) : upload
+   complet en 9,8 s sans erreur (`esphome upload --device 192.168.10.86`).
+   Le flash USB série reste la voie de référence si le lien radio se dégrade.
 7. **Wi-Fi introuvable** → l'ancien BSSID n'existait plus; le firmware sélectionne désormais dynamiquement une radio 2,4 GHz du SSID au démarrage au lieu de rester lié à un BSSID/canal périssable.
 8. **Pic de heap réseau** → le profil haut débit demandé par Sendspin réservait jusqu'à 64 buffers RX/TX et des fenêtres TCP de 64 Kio; un profil 32/32 suffit au débit FLAC et laisse davantage de SRAM au pipeline.
 9. **Ratées CPU** → la cible ESP32 générait implicitement un firmware à 160 MHz; la fréquence est fixée à 240 MHz pour le décodage FLAC, le resampling et la synchronisation.
@@ -113,7 +116,7 @@ ESPHome 2026.2.0 est la version compatible avec ces PRs git. Les versions 2026.5
 
 ```
 muse-luxe/
-├── luxe_music_min.yaml    # Firmware strict minimum SendSpin (ESPHome ≥ 2026.8.1 natif, à utiliser)
+├── luxe_music_min.yaml    # Firmware strict minimum SendSpin (ESPHome ≥ 2026.9.0 natif, à utiliser)
 ├── ma_api.py              # Client API websocket Music Assistant (auth par .ma_token)
 ├── .ma_token              # Jeton API long-durée MA (chmod 600, ne pas committer)
 ├── .check_all.py          # État ESP via API native (reset_reason + player + volume)
@@ -275,6 +278,53 @@ Configuration MA retenue :
 
 La capture détaillée et les critères d'escalade vers un patch sendspin-cpp sont
 documentés dans `crash_analysis.md`.
+
+### Incident du 2026-09-26 : son haché après maj MA 2.10.2 → 2.10.4 (HA 2026.9)
+
+Symptôme : son haché depuis ~1 h sur `maison-all`, pendant la lecture de la radio
+fip (icecast AAC). Contexte : MA serveur passé 2.10.2 → 2.10.4 (via maj HA 2026.9)
+~1 h plus tôt. ESP 2026.8.2 inchangé ; HA 2026.9 lui-même n'a aucun changement
+Sendspin/audio (vérifié changelog).
+
+Deux effets de la maj identifiés :
+
+1. **Pacing radio trop juste (MA 2.10.3, PR music-assistant/server#6237)** : les
+   flux just-in-time (radio) passent à 1.03× avec seulement **3 s d'avance**.
+   Sur le lien Wi-Fi marginal de la Muse (mesh Orbi, salle de bain), chaque
+   creux radio → sous-alimentation → haché. Observé côté API : `elapsed_time`
+   qui cale puis rattrape par sauts de +30 à +62 s toutes les 30–60 s.
+2. **Réinitialisation des réglages Sendspin du player** : `preferred_sendspin_format`
+   revenu à `automatic` (→ MA renégocie, l'ESP annonce [FLAC, OPUS, PCM] en dur)
+   et `sendspin_static_delay` 136 → 0 ms. Les réglages provider
+   (`manual_discovery_ip_addresses = [192.168.10.86]`) ont survécu. Restauration
+   via `ma_api.py config/players/save` (format `pcm:48000:16:1`, délai 136).
+
+Piège supplémentaire : après un pause/play du groupe sous 2.10.4, la télémétrie
+`elapsed_time` de la queue reste figée (re-anchor uniquement sur regroup/play_media)
+même quand le son repart — ne pas conclure « silence » sur cette seule base.
+Un stop/play, un `player_queues/play_media` (`media: [uri]`, `queue_id`) puis un
+ungroup/regroup du player web Chrome n'ont pas suffi à assainir la session ;
+**seul un redémarrage du serveur MA assainit complètement** (sessions neuves).
+
+Liens amont utiles à ce dossier :
+
+- esphome/esphome#16065 « sendspin stutters on connection handoff » (ouvert,
+  symptôme ~toutes les 30–60 min — réassociation mesh Orbi candidate) ;
+- sendspin-cpp **v0.7.1** (PR #104) réduit l'usage pile httpd de 51 % : notre
+  patch local 16 Kio devient redondant dès que sendspin-cpp ≥ 0.7.1 (déjà le cas
+  en 2026.8.2) — le garder ne coûte rien, le retirer à la prochaine regen ;
+- ESPHome **2026.9.0** ajoute `codecs:` (liste de préférence côté client, PR #19047) :
+  **fait le 2026-09-26** — `codecs: [pcm]` dans `luxe_music_min.yaml` : même un MA en
+  `automatic` ne peut plus négocier autre chose que PCM (FLAC/Opus ni annoncés ni
+  choisis), immunise contre ce type de reset de config MA ;
+- sendspin-cpp **v0.8.0** (15/09, breaking) + bump ESPHome PR #19357 fusionné le
+  18/09 : pas encore dans une release stable ESPHome, à suivre avant upgrade ;
+- RASPIAUDIO/esphomeLuxeMusic : commit 52b7ef9 (24/09, « 2026.9.3 », ESPHome
+  ≥ 2026.8.2 + IP5306) — référence à relire, mais notre firmware min reste la base.
+
+Configuration MA re-vérifiée après restauration : provider Sendspin
+`manual_discovery_ip_addresses = ["192.168.10.86"]` ; player `<MAC_MUSE>` :
+`preferred_sendspin_format = pcm:48000:16:1`, `sendspin_static_delay = 136`.
 
 ### Ce que fait le firmware minimal
 
