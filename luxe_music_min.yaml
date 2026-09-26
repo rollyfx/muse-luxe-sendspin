@@ -26,11 +26,12 @@ esphome:
           if (dac->read_byte(0x2E, &v)) {
             ESP_LOGI("boot", "LOUT1VOL = 0x%02X", v);
           }
-      # Volume initial garanti sur le DAC (le défaut 0xC0 de DACCONTROL4/5
-      # équivaut à -96 dB). MA reprendra la main dès la 1re commande volume.
-      - media_player.volume_set:
-          id: external_media_player
-          volume: 0.8
+      # Pas de volume_set au boot : speaker_source restaure lui-même le
+      # dernier volume ET l'état mute depuis la flash (pref_.load dans son
+      # setup, qui passe avant on_boot -100). Un volume_set ici écrasait la
+      # sourdine restaurée ET la démutait (volume > 0 = unmute dans
+      # speaker_source_media_player.cpp) → « son à fond » après chaque
+      # crash/reboot. Le défaut -96 dB du DAC est couvert par volume_initial.
   project:
     name: raspiaudio.music-assistant
     version: "2026.8.1-min"
@@ -50,6 +51,8 @@ logger:
   level: WARN
 
 api:
+  encryption:
+    key: /n0A+uDxEAeThOrE/bHiz1XYNqXfzsVbKisAUmyOL8A=
 
 wifi:
   networks:
@@ -176,6 +179,9 @@ media_player:
       format: WAV
       num_channels: 2
       sample_rate: 48000
+    # Premier boot uniquement (aucun état sauvegardé) : 0.5 = volume_min,
+    # jamais à fond. Les boots suivants restaurent volume+mute persistés.
+    volume_initial: 0.5
     volume_increment: 0.05
     volume_min: 0.5
     volume_max: 1.0
