@@ -314,9 +314,10 @@ Liens amont utiles à ce dossier :
   patch local 16 Kio devient redondant dès que sendspin-cpp ≥ 0.7.1 (déjà le cas
   en 2026.8.2) — le garder ne coûte rien, le retirer à la prochaine regen ;
 - ESPHome **2026.9.0** ajoute `codecs:` (liste de préférence côté client, PR #19047) :
-  **fait le 2026-09-26** — `codecs: [pcm]` dans `luxe_music_min.yaml` : même un MA en
-  `automatic` ne peut plus négocier autre chose que PCM (FLAC/Opus ni annoncés ni
-  choisis), immunise contre ce type de reset de config MA ;
+  **flashé par OTA le 2026-09-26** (upload 42,3 s, reboot propre
+  `Reboot request from esphome.ota`) — `codecs: [pcm]` dans `luxe_music_min.yaml` :
+  même un MA en `automatic` ne peut plus négocier autre chose que PCM (FLAC/Opus ni
+  annoncés ni choisis), immunise contre ce type de reset de config MA ;
 - sendspin-cpp **v0.8.0** (15/09, breaking) + bump ESPHome PR #19357 fusionné le
   18/09 : pas encore dans une release stable ESPHome, à suivre avant upgrade ;
 - RASPIAUDIO/esphomeLuxeMusic : commit 52b7ef9 (24/09, « 2026.9.3 », ESPHome
