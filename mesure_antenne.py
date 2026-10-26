@@ -5,7 +5,7 @@
 moyenne/min/max/écart-type et le nombre d'échantillons. À relancer tel quel
 après un changement d'antenne pour la comparaison A/B (voir mesures_antenne.md).
 
-Usage: .venv-2026.8.3/bin/python mesure_antenne.py [durée_s]
+Usage: MUSE_API_KEY=<api_encryption_key> .venv-2026.10/bin/python mesure_antenne.py [durée_s]
 """
 import asyncio
 import os
@@ -20,7 +20,7 @@ DURATION = int(sys.argv[1]) if len(sys.argv) > 1 else 60
 
 
 async def main() -> None:
-    cli = APIClient(HOST, PORT, None, noise_psk=None)
+    cli = APIClient(HOST, PORT, None, noise_psk=os.getenv("MUSE_API_KEY"))
     await cli.connect(login=False)
     entities, _ = await cli.list_entities_services()
     target = None

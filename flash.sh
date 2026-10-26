@@ -25,10 +25,8 @@ echo "📄 YAML: $YAML"
 echo ""
 
 # ── Méthode 1 : esphome CLI local/natif (idéal) ──
-if [ -x "$SCRIPT_DIR/.venv-2026.9/bin/esphome" ]; then
-    ESPHOME="$SCRIPT_DIR/.venv-2026.9/bin/esphome"
-elif [ -x "$SCRIPT_DIR/.venv-2026.8.3/bin/esphome" ]; then
-    ESPHOME="$SCRIPT_DIR/.venv-2026.8.3/bin/esphome"
+if [ -x "$SCRIPT_DIR/.venv-2026.10/bin/esphome" ]; then
+    ESPHOME="$SCRIPT_DIR/.venv-2026.10/bin/esphome"
 elif [ -x "$SCRIPT_DIR/.venv/bin/esphome" ]; then
     ESPHOME="$SCRIPT_DIR/.venv/bin/esphome"
 elif command -v esphome &> /dev/null; then
@@ -39,14 +37,7 @@ fi
 
 if [ -n "$ESPHOME" ]; then
     echo "✅ esphome CLI trouvé: $ESPHOME"
-    # Toujours générer une fois avant le patch : tout changement du YAML peut
-    # faire supprimer et retélécharger managed_components par ESPHome.
-    echo "🔨 Génération des dépendances..."
-    "$ESPHOME" compile "$YAML"
-    "$SCRIPT_DIR/apply_sendspin_patch.sh"
-    grep -q 'config.stack_size = 16384;' \
-        "$SCRIPT_DIR/.esphome/build/muse-luxe-music/managed_components/sendspin__sendspin-cpp/src/esp/ws_server.cpp"
-    echo "🔨 Compilation corrigée (pile HTTPD Sendspin 16 Kio)..."
+    echo "🔨 Compilation..."
     "$ESPHOME" compile "$YAML"
 
     FACTORY_BIN=$(find "$SCRIPT_DIR/.esphome/build" -name "firmware.factory.bin" 2>/dev/null | head -1)
@@ -57,8 +48,8 @@ if [ -n "$ESPHOME" ]; then
 
     echo "📦 Firmware factory: $FACTORY_BIN"
     echo "🔥 Flash série à l'offset 0x0..."
-    if [ -x "$SCRIPT_DIR/.venv/bin/esptool.py" ]; then
-        ESPTOOL="$SCRIPT_DIR/.venv/bin/esptool.py"
+    if [ -x "$(dirname "$ESPHOME")/esptool" ]; then
+        ESPTOOL="$(dirname "$ESPHOME")/esptool"
     elif command -v esptool.py &> /dev/null; then
         ESPTOOL="$(command -v esptool.py)"
     elif command -v esptool &> /dev/null; then

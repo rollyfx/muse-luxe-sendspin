@@ -2,7 +2,7 @@
 
 Comparaison A/B de l'antenne 2,4 GHz. Contexte : l'antenne a été remplacée le
 2026-08-25 pendant le diagnostic « radio HS » (qui était en réalité une ligne
-`password:` supprimée du yaml — voir README). La radio n'a jamais été en cause ;
+`password:` supprimée du yaml — voir JOURNAL.md). La radio n'a jamais été en cause ;
 ces mesures servent à décider objectivement quelle antenne garder.
 
 ## Protocole (à respecter pour que A et B soient comparables)
@@ -14,7 +14,7 @@ ces mesures servent à décider objectivement quelle antenne garder.
 - **Mesures** (depuis le PC, dans `muse-luxe/`) :
   ```bash
   # RSSI côté ESP : 60 s, 1 échantillon / 2 s (capteur temporaire wifi_signal du yaml)
-  ./.venv-2026.8.3/bin/python mesure_antenne.py 60
+  MUSE_API_KEY=<api_encryption_key> ./.venv-2026.10/bin/python mesure_antenne.py 60
   # RTT + perte (voie TX+RX aller-retour)
   ping -c 30 -i 0.3 -q <IP_MUSE>
   ```

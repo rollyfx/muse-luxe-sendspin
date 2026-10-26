@@ -125,7 +125,7 @@ continue ; elle est fausse pour les transitions de session.
 - `/tmp/reboot_watch.txt` : capture série du panic FLAC (16:50).
 - `/tmp/ser_mon.txt` : capture série de la session PCM stable (17:48+).
 - Symptomatique aussi : `Lost sync (-25 à -63 ms)` fréquents avant le crash
-  (jitter du lien Voice PE, cf. README).
+  (jitter du lien Voice PE, cf. JOURNAL.md).
 
 ## Reprise du diagnostic — 2026-09-08 (MA 2.10.2)
 
@@ -218,9 +218,9 @@ Correctif local appliqué et flashé :
 
 - `config.stack_size = 16384` dans `SendspinWsServer::start()` ;
 - `sendspin.task_stack_in_psram: false` pour placer cette pile en RAM interne ;
-- patch reproductible dans `patches/sendspin-httpd-stack.patch`, appliqué par
-  `apply_sendspin_patch.sh` et automatiquement par `flash.sh` après génération
-  des dépendances ESPHome.
+- patch local `sendspin-httpd-stack.patch` appliqué après génération des
+  dépendances ESPHome (retiré le 2026-10-26 : sendspin-cpp 0.9.3 dimensionne
+  cette pile lui-même).
 
 Validation initiale : plus de sept minutes de PCM mono sans
 `Failed to send audio chunk` ni panic, alors que le build précédent échouait
@@ -228,3 +228,83 @@ dès 42 s. Une transition de piste et trois cycles pause/reprise ont aussi été
 absorbés sans reboot ; deux corrections `Lost sync` brèves sont apparues
 pendant le churn forcé, puis la session finale est restée propre. Une validation
 longue reste nécessaire avant de déclarer le défaut définitivement résolu.
+
+## Gel complet puis récupération watchdog — 2026-09-13 (21:11)
+
+Signalement : « l'enceinte ne répond plus, plus visible sur Music Assistant ».
+Diagnostic par console série USB (`/dev/ttyUSB0`, CP2104, 115200) + API
+native ESPHome + API websocket MA (192.168.10.54:8095).
+
+Observations au moment du diagnostic (~22:00-22:15) :
+
+- ESP saine : ping OK, API native OK (handshake 21 ms), port 8928 OK,
+  websocket SendSpin MA connecté (`available: true`, idle), RSSI -48/-50 dBm,
+  volume 0.8 (valeur `on_boot`). Config MA intacte :
+  `manual_discovery_ip_addresses = [192.168.10.86]`,
+  `preferred_sendspin_format = pcm:48000:16:1`.
+- **`Reset Reason = "other watchdogs"`** (`ESP_RST_WDT`, index 7 de la table
+  debug_esp32.cpp) : reset par un watchdog autre que task/interrupt WDT.
+  Explicitement PAS un panic (`exception/panic`), PAS un brownout, PAS un
+  power-on, PAS un CPU lockup (labels distincts dans la même table).
+- Boot daté précisément **21:11:35** par alignement des timestamps IDF sur la
+  série (uptime 3 058 183 ms relevé à 22:02:33 horloge murale). Récupération
+  **autonome** par watchdog, sans intervention ni cycle d'alimentation.
+- Série muette pendant toute la session (logger WARN, rien au repos) : aucun
+  panic capté, le gel est antérieur à l'attache de la console.
+
+Lecture : **nouveau mode de défaillance** — gel complet du firmware réanimé
+par watchdog, alors que les incidents précédents étaient des panics
+`LoadProhibited` (reset `software`/`panic`). Compatible avec une corruption
+des structures du noyau (même famille que les défauts 1-2), que le correctif
+httpd 16 Kio (flashé 2026-09-08 04:16) ne couvre pas. L'hypothèse
+brownout/alim (JOURNAL.md, hard hangs à 20.5 dBm) est affaiblie pour CET événement
+(le brownout a son propre label de reset).
+
+Côté MA : pendant le gel, websocket morte → `available: false`. Le groupe
+`maison-all` (`dynamic_members: true`) a exclu la Muse de sa liste ACTIVE
+(il ne restait que Assist Bureau) alors que la config PERSISTÉE du groupe
+contient toujours les deux membres. Après retour de disponibilité, la Muse
+n'a pas été réintégrée automatiquement dans la liste active (vérifié ~90 min
+après le boot) : c'est le symptôme « plus visible ». Restitution attendue au
+prochain démarrage de lecture sur le groupe (résolution dynamique des
+membres disponibles), ou via `players/cmd/group` / l'UI MA.
+
+Surveillance : console série laissée attachée (process hub `sermon`,
+capture horodatée `/tmp/ser_mon_now.txt`) pour attraper un éventuel
+gel/panic en direct. Deux connexions ws 8928 ouvertes puis fermées en 7-8 ms
+à ~22:02 (sonde, sans boucle) — pas de churn de session en cours.
+
+### Résolution (2026-09-14, 00:41)
+
+Enceinte rebranchée en USB : l'ESP était vivant mais muet et hors réseau
+(bloqué au boot après la coupure — sync esptool OK, MAC conforme). Flash
+série du build 2026.8.2 + `api.encryption.key` via `flash.sh` (1,35 Mo,
+hash vérifié, patch HTTPD 16 Kio confirmé en place). Boot propre à 00:41:45
+(corrélé uptime série/flash), MA a rétabli la session SendSpin de lui-même :
+`available/playing`, Muse de retour dans les membres actifs de `maison-all`.
+Un `Lost sync (2,9 s)` unique à 112 s d'uptime au reprise de session, rien
+après. Console série laissée attachée (hub `sermon2`, /tmp/ser_mon_now.txt).
+
+Note : depuis le portable, l'ICMP/TCP vers 192.168.10.86 reste muet alors
+que MA (via le routeur) la joint — l'ESP a réassocié sur un autre nœud du
+mesh Orbi ; lien portable→Muse à requalifier si besoin (cf. mesures_antenne).
+L'API native chiffrée (6053) sera validée à la première reconnexion HA/ESPHome
+(la clé est dans `luxe_music_min.yaml` ; scripts locaux : `MUSE_API_KEY=…`).
+
+### Correctif « son à fond après reboot » (2026-09-14, 03:15)
+
+Symptôme : après un crash/reboot, l'enceinte revenue à volume fort alors
+qu'elle était en sourdine. Cause exacte : le `on_boot` (`media_player.volume_set
+0.8`) écrasait la restauration native de `speaker_source` (qui persiste volume
+ET mute en flash), et un volume_set > 0 **démute** explicitement
+(`speaker_source_media_player.cpp`). Correctif : volume_set supprimé du
+`on_boot`, `volume_initial: 0.5` explicite (premier boot sans état sauvegardé).
+Flashé **par OTA** depuis la nouvelle position salle de bain (upload 9,8 s,
+RSSI -54) — OTA requalifiée. Validation : après le reboot OTA, le device
+revient `volume 0.0, muted: true, session playing` (lecture directe API +
+MA `volume_level: 0`). L'API native chiffrée (6053, clé noise) a été validée
+au passage (`MUSE_API_KEY` + `check_all.py`). Nota : installée en salle de
+bain sans USB, la surveillance série n'est plus attachée ; `sermon-watch2`
+réattachera la console si un câble réapparaît. Chemin portable→MUSE : un ARP
+périmé côté portable après le déménagement a masqué l'enceinte ~2 h ; `ip
+neigh flush 192.168.10.86` suffit à le réparer.

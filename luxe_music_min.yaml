@@ -1,7 +1,7 @@
 esphome:
   name: muse-luxe-music
   friendly_name: Raspiaudio Luxe Music
-  min_version: 2026.9.0
+  min_version: 2026.10.0
   name_add_mac_suffix: false
   on_boot:
     priority: -100
@@ -28,13 +28,14 @@ esphome:
           }
       # Pas de volume_set au boot : speaker_source restaure lui-même le
       # dernier volume ET l'état mute depuis la flash (pref_.load dans son
-      # setup, qui passe avant on_boot -100). Un volume_set ici écrasait la
-      # sourdine restaurée ET la démutait (volume > 0 = unmute dans
-      # speaker_source_media_player.cpp) → « son à fond » après chaque
-      # crash/reboot. Le défaut -96 dB du DAC est couvert par volume_initial.
+      # setup, qui passe avant on_boot -100). Jusqu'en 2026.9, un volume_set
+      # ici démutait en plus (volume > 0 = unmute) → « son à fond » après
+      # chaque crash/reboot ; depuis 2026.10 volume et mute sont indépendants,
+      # mais il écraserait toujours le volume restauré. Le défaut -96 dB du
+      # DAC est couvert par volume_initial.
   project:
     name: raspiaudio.music-assistant
-    version: "2026.9.0-min"
+    version: "2026.10.0-min"
 
 esp32:
   variant: esp32
@@ -52,7 +53,7 @@ logger:
 
 api:
   encryption:
-    key: /n0A+uDxEAeThOrE/bHiz1XYNqXfzsVbKisAUmyOL8A=
+    key: !secret api_encryption_key
 
 wifi:
   networks:
@@ -137,10 +138,10 @@ speaker:
 
 sendspin:
   id: sendspin_hub
-  # Le chemin WebSocket/HTTP reçoit et déchiffre tous les chunks sur une pile
-  # de 4 Kio par défaut dans sendspin-cpp 0.7.2. Cette pile est patchée à
-  # 16 Kio dans le build ; la RAM interne donne aussi un canari fiable et évite
-  # que son débordement ne corrompe le handle du ring buffer en PSRAM.
+  # Pile HTTPD : sendspin-cpp ≥ 0.9 la dimensionne par analyse statique
+  # (4,5 Kio, plus aucun travail Noise/protocole dans httpd) ; l'ancien patch
+  # local à 16 Kio est retiré. La RAM interne donne un canari fiable et évite
+  # qu'un débordement ne corrompe le handle du ring buffer en PSRAM.
   task_stack_in_psram: false
 
 media_source:
@@ -150,7 +151,7 @@ media_source:
     # [flac, opus, pcm] — FLAC d'abord, or micro-flac corrompt le heap sur ce
     # build (crashs LoadProhibited, cf. crash_analysis.md) et Opus déborde la
     # pile SyncTask. Annoncer PCM seul : quel que soit le réglage MA (qui a
-    # déjà été réinitialisé par une maj, cf. README 2026-09-26), le serveur ne
+    # déjà été réinitialisé par une maj, cf. JOURNAL.md 2026-09-26), le serveur ne
     # peut négocier que le profil validé pcm 48 kHz/16 bit (mono imposé côté MA).
     codecs: [pcm]
     # 512 Kio se remplissaient pendant le burst PCM initial (chunks rejetés,
@@ -290,9 +291,10 @@ light:
     default_transition_length: 0s
     chipset: WS2812
     num_leds: 1
-    rgb_order: grb
+    channel_colors: GRB
 
-# --- Instrumentation temporaire (diagnostic position définitive) ---
+# Diagnostic à distance (RSSI, BSSID associé, raison du dernier reset) :
+# exposé dans Home Assistant, coût négligeable, utile sans accès USB.
 sensor:
   - platform: wifi_signal
     name: "RSSI Wi-Fi"
